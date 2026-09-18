@@ -1,0 +1,18 @@
+# MuleSoft / Maven
+target/
+*.log
+
+# Local / secret configuration
+*.local.properties
+*.secure.properties
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
