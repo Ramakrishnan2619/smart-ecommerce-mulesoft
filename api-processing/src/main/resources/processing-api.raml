@@ -1,0 +1,25 @@
+#%RAML 1.0
+title: Processing API
+version: v1
+baseUri: http://localhost:8083
+
+/process-order:
+  post:
+    body:
+      application/json:
+        example:
+          {
+            "orderId": "ORD1001",
+            "customerId": "CUS101",
+            "amount": 85000,
+            "email": "customer@example.com"
+          }
+    responses:
+      200:
+        body:
+          application/json:
+            example:
+              {
+                "orderId": "ORD1001",
+                "status": "PROCESSING"
+              }

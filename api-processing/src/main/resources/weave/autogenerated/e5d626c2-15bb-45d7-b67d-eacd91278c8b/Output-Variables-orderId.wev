@@ -1,0 +1,4 @@
+%dw 2.0
+
+type auto_e5d626c2_15bb_45d7_b67d_eacd91278c8b_Output_Variables_orderId = Any
+
