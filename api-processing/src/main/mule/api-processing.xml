@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:file="http://www.mulesoft.org/schema/mule/file" xmlns:vm="http://www.mulesoft.org/schema/mule/vm"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/vm http://www.mulesoft.org/schema/mule/vm/current/mule-vm.xsd
+http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd">
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="b0cc297d-1dba-44f7-8597-8571a2a5b649" >
+		<http:listener-connection host="0.0.0.0" port="8083" />
+	</http:listener-config>
+	<vm:config name="Processing_VM_Config" doc:name="VM Config" doc:id="a1b1e43d-bfac-4c0c-be96-8916695e212e">
+		<vm:queues >
+			<vm:queue queueName="priority-orders" />
+		</vm:queues>
+	</vm:config>
+	<file:config name="Processing_File_Config" doc:name="File Config" doc:id="cadd28d7-5799-468e-b352-7f023274bbfd" />
+	<http:request-config name="Processing_HTTP_Config" doc:name="HTTP Request configuration" doc:id="80da83e3-30af-4d35-a40b-9751b3e41d1f" >
+		<http:request-connection host="localhost" port="8083" />
+	</http:request-config>
+	<flow name="ProcessRequest" doc:id="a9e8e946-3e97-4dcd-a3e3-62cc718f79be" >
+		<logger level="INFO" doc:name="Logger" doc:id="91ca71cd-6fa6-4df4-94cf-7cf1837329b1" message="Received order for processing"/>
+		<ee:transform doc:name="Transform Message" doc:id="20fb0629-0ffa-44f0-bf16-0a21b80009b7" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+    orderId: payload.orderId,
+    customerId: payload.customerId,
+    amount: payload.amount,
+    email: payload.email
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<choice doc:name="Choice" doc:id="9cad090d-491c-4c5a-8325-b3564f69c169" >
+			<when expression="#[payload.amount &gt;= 50000]">
+				<ee:transform doc:name="Transform Message" doc:id="5f2dce04-ede8-4ca9-be62-41ccf44068dc" >
+					<ee:message >
+						<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+    orderId: payload.orderId,
+    customerId: payload.customerId,
+    amount: payload.amount,
+    orderType: "PRIORITY",
+    status: "READY_FOR_FULFILLMENT",
+    email: payload.email
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</when>
+			<otherwise >
+				<ee:transform doc:name="Transform Message" doc:id="cf8d634b-eb2e-4372-ba29-94dfd9a0bb68" >
+					<ee:message >
+						<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+    orderId: payload.orderId,
+    customerId: payload.customerId,
+    amount: payload.amount,
+    orderType: "STANDARD",
+    status: "READY_FOR_FULFILLMENT",
+    email: payload.email
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</otherwise>
+		</choice>
+	</flow>
+	<flow name="priority-processing-flow" doc:id="82756254-7aac-494c-b09e-10ca8cef0c38" >
+		<vm:listener doc:name="Priority VM Listener" doc:id="53e0eb8e-7649-49a5-a97c-1e3be3d9be9a" timeoutUnit="DAYS" config-ref="Processing_VM_Config" queueName="priority-orders"/>
+		<logger level="INFO" doc:name="Logger" doc:id="a9c3d094-0750-47e2-badc-60c839d5219f" message="Priority order received for processing"/>
+		<ee:transform doc:name="Transform Message" doc:id="6c861d57-7bb7-4d78-85ad-1509f89bde41" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+{
+    orderId: payload.orderId,
+    customerId: payload.customerId,
+    amount: payload.amount,
+    orderType: payload.orderType,
+    status: "PROCESSING",
+    email: payload.email
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<set-variable value="#[payload.orderId]" doc:name="Save Order ID" doc:id="c1e8e5b9-1cea-4de8-8252-046908539ff0" variableName="orderId"/>
+		<ee:transform doc:name="Transform Message" doc:id="b89ddace-b89b-4d04-a1b2-ea094ed367ab" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/csv header=true
+---
+[{
+    orderId: payload.orderId,
+    customerId: payload.customerId,
+    amount: payload.amount,
+    orderType: payload.orderType,
+    status: payload.status,
+    email: payload.email
+}]]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+		<file:write doc:name="Write Processed Order" doc:id="a1a51d47-5d5d-444d-bbbd-94e7b2e44e38" path='#[("processed/" ++ vars.orderId ++ ".csv")]' config-ref="Processing_File_Config">
+		</file:write>
+		<flow-ref doc:name="Flow Reference" doc:id="8430547c-1cbd-4998-b3f8-e4682c4b1746" name="processing-logging-subflow"/>
+		<http:request method="PUT" doc:name="Practice HTTP Request" doc:id="8f5af32f-1e5f-40c8-9a85-c076617a35f3" config-ref="Processing_HTTP_Config" path="/api/process-order">
+		</http:request>
+	</flow>
+	<sub-flow name="processing-logging-subflow" doc:id="e5d626c2-15bb-45d7-b67d-eacd91278c8b" >
+		<logger level="INFO" doc:name="Processing Log" doc:id="8f53f0fd-eebf-4dc4-9ecb-8a327b542900" message="Order processing completed"/>
+	</sub-flow>
+	<flow name="api-processingFlow" doc:id="e6028e1e-e8ee-4f95-8305-c24c133d8a09" >
+		<scheduler doc:name="scheduled-processing-practice" doc:id="a8d3b276-6a1e-4a4a-93fe-c8a6f5360257" >
+			<scheduling-strategy >
+				<fixed-frequency frequency="60" timeUnit="SECONDS"/>
+			</scheduling-strategy>
+		</scheduler>
+		<logger level="INFO" doc:name="Scheduler Log" doc:id="e9acf3dc-8627-420e-bff2-4fe70f255e7f" message="Scheduled processing check triggered"/>
+		<error-handler >
+			<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="4cfda64d-6348-4b06-b0a3-ffbcbcff4a9f" >
+				<logger level="ERROR" doc:name="Error Log" doc:id="b9c45e55-2c2c-44c8-8c66-ff8c8f02e8ca" message="Scheduled processing failed"/>
+			</on-error-propagate>
+		</error-handler>
+	</flow>
+	<flow name="api-processingFlow1" doc:id="242990b7-5040-43b4-862b-5b814bbd2558" >
+		<scheduler doc:name="error-continue-practice" doc:id="89fb42a8-baa8-40e7-a185-1b3f6765160f" >
+			<scheduling-strategy >
+				<fixed-frequency />
+			</scheduling-strategy>
+		</scheduler>
+		<logger level="INFO" doc:name="Before Error" doc:id="c22cc67b-1f9d-425e-a42a-14c17dc22820" message="Testing On Error Continue"/>
+		<error-handler >
+			<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue" doc:id="7158c1b5-bff2-425d-80a8-b04d2edcf66c" >
+				<logger level="ERROR" doc:name="Continue Error Log" doc:id="c686c695-8f69-4337-91ed-ab6babcc1e8f" message="Error handled and processing continued"/>
+			</on-error-continue>
+		</error-handler>
+	</flow>
+</mule>
