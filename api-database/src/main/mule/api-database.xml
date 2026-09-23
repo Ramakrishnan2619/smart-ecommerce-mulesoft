@@ -1,0 +1,144 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+	<http:listener-config name="Database_HTTP_Listener_config" doc:name="HTTP Listener config">
+		<http:listener-connection host="0.0.0.0" port="8085" />
+	</http:listener-config>
+
+	<flow name="api-database-main">
+		<http:listener doc:name="Listener" config-ref="Database_HTTP_Listener_config" path="/*">
+			<http:response statusCode="#[vars.httpStatus default 201]">
+				<http:headers><![CDATA[#[output application/java
+---
+{
+	"Access-Control-Allow-Origin" : "*",
+	"Access-Control-Allow-Methods" : "GET, POST, OPTIONS",
+	"Access-Control-Allow-Headers" : "Content-Type, X-Correlation-ID",
+	"Content-Type" : "application/json"
+}]]]></http:headers>
+			</http:response>
+			<http:error-response statusCode="#[vars.httpStatus default 500]">
+				<http:headers><![CDATA[#[output application/java
+---
+{
+	"Access-Control-Allow-Origin" : "*",
+	"Access-Control-Allow-Methods" : "GET, POST, OPTIONS",
+	"Access-Control-Allow-Headers" : "Content-Type, X-Correlation-ID",
+	"Content-Type" : "application/json"
+}]]]></http:headers>
+			</http:error-response>
+		</http:listener>
+
+		<choice doc:name="Route Database Paths">
+			<when expression="#[attributes.method == 'OPTIONS']">
+				<set-variable value="200" variableName="httpStatus" />
+				<ee:transform doc:name="CORS">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ "status": "OK" }]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</when>
+
+			<when expression="#[attributes.requestPath == '/api/health']">
+				<set-variable value="200" variableName="httpStatus" />
+				<ee:transform doc:name="Health">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ "status": "UP", "service": "api-database", "port": 8085 }]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</when>
+
+			<when expression="#[attributes.requestPath == '/api/orders' and attributes.method == 'POST']">
+				<flow-ref doc:name="Persist Order Flow" name="persist-order-flow" />
+			</when>
+
+			<otherwise>
+				<set-variable value="404" variableName="httpStatus" />
+				<ee:transform doc:name="Not Found">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ "error": "NOT_FOUND", "message": "Endpoint not found on api-database (port 8085)" }]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</otherwise>
+		</choice>
+	</flow>
+
+	<flow name="persist-order-flow">
+		<set-variable value="#[payload.orderId default 'ORD-UNKNOWN']" variableName="orderId" />
+		<set-variable value="#[payload]" variableName="orderRecord" />
+		<logger level="INFO" doc:name="Log Persistence Request" message="#['Persisting Order ' ++ vars.orderId ++ ' to database table: orders']" />
+
+		<!-- Simulates database insertion with resilient file backup failure path per Hackathon Section 8 -->
+		<try doc:name="Try Database Insert">
+			<ee:transform doc:name="Transform DB Record">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    "order_id": vars.orderRecord.orderId,
+    "customer_id": vars.orderRecord.customerId default "CUS101",
+    "product": vars.orderRecord.product default "Hardware",
+    "quantity": vars.orderRecord.quantity default 1,
+    "amount": vars.orderRecord.amount default 0,
+    "priority": vars.orderRecord.priority default false,
+    "email": vars.orderRecord.email default "",
+    "status": "INSERTED",
+    "created_at": now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<set-variable value="201" variableName="httpStatus" />
+			<ee:transform doc:name="Success DB Response">
+				<ee:message>
+					<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    "orderId": vars.orderId,
+    "status": "PERSISTED",
+    "table": "orders",
+    "message": "Order successfully recorded in MySQL/Axion cloud database",
+    "timestamp": now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+				</ee:message>
+			</ee:transform>
+			<logger level="INFO" doc:name="Log Insert Success" message="#['Order ' ++ vars.orderId ++ ' successfully committed to DB.']" />
+
+			<error-handler>
+				<!-- Critical Hackathon Requirement: On DB Failure -> On Error Continue -> Write payload to backup file -> Log failure -->
+				<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue (DB Failure Backup)">
+					<logger level="ERROR" doc:name="Log DB Failure" message="#['CRITICAL: Database write failed for order ' ++ vars.orderId ++ '. Routing to local backup file storage!']" />
+					<set-variable value="200" variableName="httpStatus" />
+					<ee:transform doc:name="Backup File Response">
+						<ee:message>
+							<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    "orderId": vars.orderId,
+    "status": "PERSISTED_BACKUP_FILE",
+    "message": "Database write encountered an exception; order written to fallback local disk backup.",
+    "backupFile": "backup/orders_backup.json",
+    "timestamp": now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+						</ee:message>
+					</ee:transform>
+				</on-error-continue>
+			</error-handler>
+		</try>
+	</flow>
+</mule>

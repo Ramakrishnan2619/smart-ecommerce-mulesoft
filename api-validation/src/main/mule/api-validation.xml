@@ -5,12 +5,12 @@
 http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
 http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
 
-	<http:listener-config name="Notification_HTTP_Listener_config" doc:name="HTTP Listener config">
-		<http:listener-connection host="0.0.0.0" port="8084" />
+	<http:listener-config name="Validation_HTTP_Listener_config" doc:name="HTTP Listener config">
+		<http:listener-connection host="0.0.0.0" port="8082" />
 	</http:listener-config>
 
-	<flow name="api-notification-main">
-		<http:listener doc:name="Listener" config-ref="Notification_HTTP_Listener_config" path="/*">
+	<flow name="api-validation-main">
+		<http:listener doc:name="Listener" config-ref="Validation_HTTP_Listener_config" path="/*">
 			<http:response statusCode="#[vars.httpStatus default 200]">
 				<http:headers><![CDATA[#[output application/java
 ---
@@ -21,7 +21,7 @@ http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/
 	"Content-Type" : "application/json"
 }]]]></http:headers>
 			</http:response>
-			<http:error-response statusCode="#[vars.httpStatus default 500]">
+			<http:error-response statusCode="#[vars.httpStatus default 400]">
 				<http:headers><![CDATA[#[output application/java
 ---
 {
@@ -33,7 +33,7 @@ http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/
 			</http:error-response>
 		</http:listener>
 
-		<choice doc:name="Route Notification Paths">
+		<choice doc:name="Route Validation Paths">
 			<when expression="#[attributes.method == 'OPTIONS']">
 				<set-variable value="200" variableName="httpStatus" />
 				<ee:transform doc:name="CORS">
@@ -52,13 +52,13 @@ output application/json
 						<ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{ "status": "UP", "service": "api-notification", "port": 8084 }]]></ee:set-payload>
+{ "status": "UP", "service": "api-validation", "port": 8082 }]]></ee:set-payload>
 					</ee:message>
 				</ee:transform>
 			</when>
 
-			<when expression="#[attributes.requestPath == '/api/notify-order' and attributes.method == 'POST']">
-				<flow-ref doc:name="Send Notification Flow" name="send-notification-flow" />
+			<when expression="#[attributes.requestPath == '/api/validate-order' and attributes.method == 'POST']">
+				<flow-ref doc:name="Execute Validation Subflow" name="validate-order-subflow" />
 			</when>
 
 			<otherwise>
@@ -68,56 +68,54 @@ output application/json
 						<ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
-{ "error": "NOT_FOUND", "message": "Endpoint not found on api-notification (port 8084)" }]]></ee:set-payload>
+{ "error": "NOT_FOUND", "message": "Endpoint not found on api-validation (port 8082)" }]]></ee:set-payload>
 					</ee:message>
 				</ee:transform>
 			</otherwise>
 		</choice>
 	</flow>
 
-	<flow name="send-notification-flow">
-		<set-variable value="#[payload.orderId default 'ORD-UNKNOWN']" variableName="orderId" />
-		<set-variable value="#[payload.email default 'customer@example.com']" variableName="recipientEmail" />
-		<set-variable value="#[payload.orderType default 'STANDARD']" variableName="orderType" />
-
-		<logger level="INFO" doc:name="Log Notification" message="#['Preparing confirmation email for Order: ' ++ vars.orderId ++ ' to ' ++ vars.recipientEmail ++ ' (Type: ' ++ vars.orderType ++ ')']" />
-
-		<!-- Formats email notification body -->
-		<ee:transform doc:name="Format Notification Body">
-			<ee:message>
-				<ee:set-payload><![CDATA[%dw 2.0
-output application/json
----
-{
-    "orderId": vars.orderId,
-    "status": "NOTIFICATION_SENT",
-    "recipient": vars.recipientEmail,
-    "orderType": vars.orderType,
-    "message": "Order confirmation notification dispatched successfully to " ++ vars.recipientEmail,
-    "timestamp": now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
-}]]></ee:set-payload>
-			</ee:message>
-		</ee:transform>
-
-		<logger level="INFO" doc:name="Log Success" message="#['Notification successfully queued for Order ' ++ vars.orderId]" />
-
-		<error-handler>
-			<!-- Demonstrating On Error Continue to ensure email glitches don't break order pipeline -->
-			<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue">
-				<logger level="WARN" doc:name="Log Warning" message="#['Notification failed for order ' ++ vars.orderId ++ ' - Continuing pipeline via On Error Continue']" />
-				<ee:transform doc:name="Degraded Notification Response">
+	<sub-flow name="validate-order-subflow">
+		<logger level="INFO" doc:name="Log Validation Request" message="#['Validating order: ' ++ (payload.orderId default 'UNKNOWN')]" />
+		<set-variable value="#[payload.orderId default 'UNKNOWN']" variableName="orderId" />
+		
+		<choice doc:name="Check Validation Rules">
+			<when expression="#[payload.orderId != null and payload.customerId != null and payload.amount != null and (payload.amount &gt; 0) and payload.quantity != null and (payload.quantity &gt; 0) and payload.email != null and (payload.email contains '@')]">
+				<set-variable value="200" variableName="httpStatus" />
+				<ee:transform doc:name="Valid Order Response">
 					<ee:message>
 						<ee:set-payload><![CDATA[%dw 2.0
 output application/json
 ---
 {
-    "orderId": vars.orderId default "UNKNOWN",
-    "status": "NOTIFICATION_DEGRADED",
-    "message": "Notification server unavailable; marked for deferred retry"
+    "orderId": vars.orderId,
+    "isValid": true,
+    "status": "VALIDATED",
+    "message": "Order passed all validation checks successfully",
+    "timestamp": now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
 }]]></ee:set-payload>
 					</ee:message>
 				</ee:transform>
-			</on-error-continue>
-		</error-handler>
-	</flow>
+				<logger level="INFO" doc:name="Log Valid Result" message="#['Order ' ++ vars.orderId ++ ' successfully validated.']" />
+			</when>
+			<otherwise>
+				<set-variable value="400" variableName="httpStatus" />
+				<ee:transform doc:name="Invalid Order Response">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    "orderId": vars.orderId,
+    "isValid": false,
+    "status": "REJECTED",
+    "errorCode": "VALIDATION_ERROR",
+    "message": "Order validation failed: Required fields missing or invalid (check orderId, amount > 0, quantity > 0, email format)"
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<logger level="WARN" doc:name="Log Invalid Result" message="#['Order ' ++ vars.orderId ++ ' failed validation rules.']" />
+			</otherwise>
+		</choice>
+	</sub-flow>
 </mule>

@@ -1,0 +1,39 @@
+﻿#%RAML 1.0
+title: Notification API
+version: v1
+baseUri: http://localhost:8084/api
+mediaType: application/json
+
+/health:
+  get:
+    responses:
+      200:
+        body:
+          application/json:
+            example:
+              { "status": "UP", "service": "api-notification", "port": 8084 }
+
+/notify-order:
+  post:
+    body:
+      application/json:
+        example:
+          {
+            "orderId": "ORD1001",
+            "customerId": "CUS101",
+            "amount": 85000,
+            "orderType": "PRIORITY",
+            "status": "READY_FOR_FULFILLMENT",
+            "email": "customer@example.com"
+          }
+    responses:
+      200:
+        body:
+          application/json:
+            example:
+              {
+                "orderId": "ORD1001",
+                "status": "NOTIFICATION_SENT",
+                "recipient": "customer@example.com",
+                "message": "Order confirmation notification dispatched successfully"
+              }
