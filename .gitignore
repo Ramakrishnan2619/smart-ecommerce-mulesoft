@@ -16,3 +16,8 @@ target/
 # OS
 .DS_Store
 Thumbs.db
+
+# Eclipse / Anypoint Studio
+.classpath
+.project
+.settings/

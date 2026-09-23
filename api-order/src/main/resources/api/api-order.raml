@@ -1,0 +1,71 @@
+﻿#%RAML 1.0
+title: Order Orchestration API
+version: v1
+baseUri: http://localhost:8081/api
+mediaType: application/json
+
+/health:
+  get:
+    description: Health check endpoint
+    responses:
+      200:
+        body:
+          application/json:
+            example:
+              {
+                "status": "UP",
+                "service": "api-order",
+                "port": 8081,
+                "timestamp": "2026-09-23T14:30:00Z"
+              }
+
+/orders:
+  post:
+    description: Ingest and orchestrate e-commerce orders
+    headers:
+      X-Correlation-ID?:
+        type: string
+        description: Distributed trace correlation ID
+    body:
+      application/json:
+        example:
+          {
+            "orderId": "ORD1001",
+            "customerId": "CUS101",
+            "product": "Laptop",
+            "quantity": 2,
+            "amount": 85000,
+            "priority": true,
+            "email": "customer@example.com"
+          }
+    responses:
+      201:
+        body:
+          application/json:
+            example:
+              {
+                "orderId": "ORD1001",
+                "status": "RECEIVED",
+                "message": "Order received successfully",
+                "correlationId": "CORR-ORD1001-001"
+              }
+      400:
+        body:
+          application/json:
+            example:
+              {
+                "orderId": "ORD1001",
+                "status": "REJECTED",
+                "errorCode": "VALIDATION_ERROR",
+                "message": "Invalid order payload"
+              }
+      500:
+        body:
+          application/json:
+            example:
+              {
+                "orderId": "ORD1001",
+                "status": "REJECTED",
+                "errorCode": "ORCHESTRATION_ERROR",
+                "message": "Downstream processing failed"
+              }

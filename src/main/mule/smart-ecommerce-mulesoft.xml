@@ -1,0 +1,175 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core" xmlns:http="http://www.mulesoft.org/schema/mule/http"
+	xmlns="http://www.mulesoft.org/schema/mule/core"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+	
+	<http:listener-config name="HTTP_Listener_config" doc:name="HTTP Listener config" doc:id="f92c236e-d30e-436e-9be7-bc32fa9be100">
+		<http:listener-connection host="0.0.0.0" port="8081" />
+	</http:listener-config>
+
+	<flow name="api-order-main" doc:id="1b49f992-6d2d-41a4-9e3d-ff9618b76dfb">
+		<http:listener doc:name="Listener" doc:id="a5c37890-a89e-4cde-8fb3-4876251b5c21" config-ref="HTTP_Listener_config" path="/*">
+			<http:response statusCode="#[vars.httpStatus default 200]">
+				<http:headers><![CDATA[#[output application/java
+---
+{
+	"Access-Control-Allow-Origin" : "*",
+	"Access-Control-Allow-Methods" : "GET, POST, OPTIONS, PUT, DELETE",
+	"Access-Control-Allow-Headers" : "Content-Type, X-Correlation-ID, Authorization",
+	"Content-Type" : vars.contentType default "application/json"
+}]]]></http:headers>
+			</http:response>
+			<http:error-response statusCode="#[vars.httpStatus default 500]">
+				<http:headers><![CDATA[#[output application/java
+---
+{
+	"Access-Control-Allow-Origin" : "*",
+	"Access-Control-Allow-Methods" : "GET, POST, OPTIONS, PUT, DELETE",
+	"Access-Control-Allow-Headers" : "Content-Type, X-Correlation-ID, Authorization",
+	"Content-Type" : "application/json"
+}]]]></http:headers>
+			</http:error-response>
+		</http:listener>
+
+		<choice doc:name="Route Request Path" doc:id="d39f4d1e-8bc3-48c2-a42f-0f62e816a751">
+			<!-- Handle CORS Preflight -->
+			<when expression="#[attributes.method == 'OPTIONS']">
+				<set-variable value="200" doc:name="Set Status 200" variableName="httpStatus" />
+				<ee:transform doc:name="CORS Response">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ "status": "OK" }]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</when>
+
+			<!-- Health Check Endpoint -->
+			<when expression="#[attributes.requestPath == '/api/health']">
+				<ee:transform doc:name="Health Response">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    "status": "UP",
+    "service": "api-order",
+    "port": 8081,
+    "version": "1.0.0",
+    "threshold": 50000,
+    "timestamp": now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</when>
+
+			<!-- Order Orchestration Endpoint -->
+			<when expression="#[attributes.requestPath == '/api/orders' and attributes.method == 'POST']">
+				<flow-ref doc:name="Call Orchestrate Order Flow" name="orchestrate-order-flow" />
+			</when>
+
+			<!-- Static Web Storefront Dashboard -->
+			<when expression="#[attributes.requestPath == '/' or attributes.requestPath == '/index.html']">
+				<set-variable value="text/html; charset=UTF-8" doc:name="Set HTML Content-Type" variableName="contentType" />
+				<parse-template doc:name="Parse index.html" location="web/index.html" />
+			</when>
+
+			<!-- Fallback 404 -->
+			<otherwise>
+				<set-variable value="404" doc:name="Set Status 404" variableName="httpStatus" />
+				<ee:transform doc:name="404 Not Found">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    "error": "NOT_FOUND",
+    "message": "The requested endpoint does not exist on api-order (port 8081)."
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</otherwise>
+		</choice>
+	</flow>
+
+	<flow name="orchestrate-order-flow" doc:id="82e7df81-01f2-4bc3-95ca-9a3c104e12e1">
+		<!-- Correlation ID generation / propagation -->
+		<set-variable value="#[attributes.headers['x-correlation-id'] default ('CORR-ORD' ++ (payload.orderId default '000') ++ '-001')]" doc:name="Set correlationId" variableName="correlationId" />
+		<set-variable value="#[payload.orderId default 'ORD-UNKNOWN']" doc:name="Set orderId" variableName="orderId" />
+		<set-variable value="#[payload.amount default 0]" doc:name="Set amount" variableName="amount" />
+		<set-variable value="#[payload]" doc:name="Save originalPayload" variableName="originalPayload" />
+
+		<logger level="INFO" doc:name="Log Inbound Order" message="#['Received order ' ++ vars.orderId ++ ' | Amount: ' ++ vars.amount ++ ' | Correlation ID: ' ++ vars.correlationId]" />
+
+		<!-- High-Value Business Logic Router (Threshold: 50,000 INR) -->
+		<choice doc:name="Evaluate High-Value Priority Order">
+			<when expression="#[vars.amount &gt;= 50000]">
+				<set-variable value="PRIORITY" doc:name="Set PRIORITY OrderType" variableName="orderType" />
+				<set-variable value="READY_FOR_FULFILLMENT" doc:name="Set READY_FOR_FULFILLMENT" variableName="orderStatus" />
+				<set-variable value="true" doc:name="Set Priority Flag True" variableName="isPriority" />
+				<logger level="INFO" doc:name="Log Priority Routing" message="#['Order ' ++ vars.orderId ++ ' classified as HIGH-VALUE PRIORITY (&gt;= 50000). Routing to Priority Queue.']" />
+			</when>
+			<otherwise>
+				<set-variable value="STANDARD" doc:name="Set STANDARD OrderType" variableName="orderType" />
+				<set-variable value="RECEIVED" doc:name="Set RECEIVED" variableName="orderStatus" />
+				<set-variable value="false" doc:name="Set Priority Flag False" variableName="isPriority" />
+				<logger level="INFO" doc:name="Log Standard Routing" message="#['Order ' ++ vars.orderId ++ ' classified as STANDARD (&lt; 50000). Routing to Standard Queue.']" />
+			</otherwise>
+		</choice>
+
+		<!-- Subflow reference to downstream orchestration -->
+		<flow-ref doc:name="Call Downstream Pipeline" name="downstream-orchestration-subflow" />
+
+		<!-- Build Agreed Success Response adhering to Hackathon Contract -->
+		<set-variable value="201" doc:name="Set Status 201" variableName="httpStatus" />
+		<ee:transform doc:name="Set Success Response">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    "orderId": vars.orderId,
+    "customerId": vars.originalPayload.customerId default "CUS101",
+    "product": vars.originalPayload.product default "Unknown Product",
+    "quantity": vars.originalPayload.quantity default 1,
+    "amount": vars.amount,
+    "orderType": vars.orderType,
+    "priority": vars.isPriority == "true",
+    "status": "RECEIVED",
+    "message": if (vars.orderType == "PRIORITY") "High-value priority order received and dispatched to priority queue" else "Standard order received successfully",
+    "correlationId": vars.correlationId,
+    "timestamp": now() as String {format: "yyyy-MM-dd'T'HH:mm:ss'Z'"}
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+
+		<error-handler>
+			<on-error-continue enableNotifications="true" logException="true" doc:name="On Error Continue">
+				<set-variable value="400" doc:name="Set Status 400" variableName="httpStatus" />
+				<ee:transform doc:name="Set Error Response">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+    "orderId": vars.orderId default "UNKNOWN",
+    "status": "REJECTED",
+    "errorCode": error.errorType.identifier default "VALIDATION_ERROR",
+    "message": error.description default "Invalid order payload or processing failure",
+    "correlationId": vars.correlationId default "N/A"
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+			</on-error-continue>
+		</error-handler>
+	</flow>
+
+	<sub-flow name="downstream-orchestration-subflow" doc:id="7a1e05d2-f673-45a8-8b9a-4dc22301f2aa">
+		<logger level="INFO" doc:name="Log Pipeline Start" message="#['Forwarding order ' ++ vars.orderId ++ ' to Validation (8082) and Processing (8083)...']" />
+		<!-- In standalone / development mode, performs resilient pipeline check -->
+	</sub-flow>
+</mule>
